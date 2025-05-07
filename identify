@@ -63,9 +63,12 @@ def identify():
     model = subprocess.run(["cat", "/sys/firmware/devicetree/base/model"], capture_output=True)
     print(f"Model: {model.stdout.decode('utf-8')}")
     hardware = subprocess.run(["cat", "/sys/firmware/devicetree/base/hardware"], capture_output=True)
-    print(f"Hardware: {hardware.stdout.decode('utf-8').strip()}\n")
-    #print("\nSerial Number:")
-    #subprocess.run(["go-sn", "r"])
+    print(f"Hardware: {hardware.stdout.decode('utf-8').strip()}")
+    sn = subprocess.run(["go-sn", "r"], capture_output=True)
+    if sn.returncode == 0:
+        print(f"Serial Number: {sn.stdout.decode('utf-8').strip()}\n")
+    else:
+        print("Serial Number: Could not get serial number maybe not written yet?")
 
     if args.scan_modules:
         try:

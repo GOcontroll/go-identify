@@ -5,9 +5,6 @@ Maintainer: Maud Spierings <maudspierings@gocontroll.com>
 Rules-Requires-Root: no
 Build-Depends:
  debhelper-compat (= 13),
- dh-sequence-python3,
- python3-setuptools,
- python3-all,
 Standards-Version: 4.6.2
 Homepage: https://gocontroll.com
 Vcs-Browser: https://github.com/GOcontroll/go-identify
@@ -18,8 +15,8 @@ Architecture: all
 Depends:
  lsb-release,
  go-modules,
- ${python3:Depends},
- ${misc:Depends},
+ go-sn,
+ python3,
 Suggests:
  python3-go-leds,
 Description: A small script to print some info and flash leds if available
