@@ -1,3 +1,10 @@
+go-identify (1.1.0) unstable; urgency=medium
+
+  * Read module configuration from /lib/firmware/gocontroll/modules
+  * Add apt distribution workflow
+
+ -- Rick-GO <rickgijsberts@gocontroll.com>  Tue, 31 Mar 2026 00:00:00 +0200
+
 go-identify (1.0.0) unstable; urgency=medium
 
   * Initial release.

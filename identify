@@ -78,7 +78,7 @@ def identify():
 
     print("Module configuration: ")
     try:
-        with open("/usr/lib/gocontroll/modules", "r") as modulesfile:
+        with open("/lib/firmware/gocontroll/modules", "r") as modulesfile:
             layout = modulesfile.readline()[:-1]
             manufacturers = modulesfile.readline()[:-1]
             moduleQRsfront = modulesfile.readline()[:-1]
