@@ -1,3 +1,19 @@
+go-identify (2.0.0) unstable; urgency=medium
+
+  * Complete rewrite with comprehensive controller information display
+  * Renamed executable from 'identify' to 'go-identify'
+  * Box-drawing table layout: controller info at top, modules at bottom
+  * Show kernel version, OS, root filesystem usage, controller model and hardware
+  * List all installed go-* packages with versions (go-identify shown first)
+  * Ethernet section: interface name, MAC address, IPv4 address
+  * WiFi/Bluetooth section (optional): MAC, IP, SSID, signal strength, BT MAC
+  * 4G modem section (optional, SIM7600G): IMEI, IMSI, ICCID, operator, signal, IP
+  * CAN interfaces table: state, bitrate, controller type
+  * Modules table: slot, type, HW version, SW version, release date from cloud manifest
+  * SHA256-validated release dates fetched from firmware.gocontroll.com
+
+ -- Rick-GO <rickgijsberts@gocontroll.com>  Fri, 03 Apr 2026 00:00:00 +0200
+
 go-identify (1.1.0) unstable; urgency=medium
 
   * Read module configuration from /lib/firmware/gocontroll/modules
