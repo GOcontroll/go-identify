@@ -1,130 +1,651 @@
 #!/usr/bin/env python3
+"""
+identify v2.1.0 — GOcontroll controller identification tool
+
+Displays comprehensive information about a GOcontroll Moduline controller:
+controller hardware, installed go-* tools, network interfaces (Ethernet, WiFi,
+4G modem), CAN interfaces, and installed module firmware.
+"""
+
+import json
+import os
 import subprocess
 import threading
-from argparse import ArgumentParser, BooleanOptionalAction
 
-def led_flashing():
+# Maps (type_group, type_id) from firmware bytes to human-readable module name
+MODULE_TYPES = {
+    (10, 1): "6 Channel Input",
+    (10, 2): "10 Channel Input",
+    (10, 3): "4-20mA Input",
+    (20, 1): "2 Channel Output",
+    (20, 2): "6 Channel Output",
+    (20, 3): "10 Channel Output",
+    (30, 3): "ANLEG IR",
+    (30, 4): "Multibus",
+    (40, 1): "ANLEG RTC Control",
+}
+
+# ─────────────────────────────────────────────────────────────
+# System helpers
+# ─────────────────────────────────────────────────────────────
+
+def _run(cmd, timeout=5):
+    """Run a command; return stdout string if exit 0, else None."""
     try:
-        subprocess.run(["go-flash-leds", "-r", "500", "5"], capture_output=True)
-    except:
-        pass
-
-def get_module_name(module: str) -> str:
-    if "20-10-1" in module:
-        return "6 channel input"
-    elif "20-10-2" in module:
-        return "10 channel input"
-    elif "20-10-3" in module:
-        return "4 - 20mA input"
-    elif "20-20-1" in module:
-        return "2 channel power bridge"
-    elif "20-20-2" in module:
-        return "6 channel output"
-    elif "20-20-2" in module:
-        return "10 channel output"
-    elif "20-30-3" in module:
-        return "IR communication"
-    else:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        if r.returncode == 0:
+            return r.stdout.decode("utf-8", errors="replace").strip()
+        return None
+    except Exception:
         return None
 
-def identify():
-    parser = ArgumentParser(
+
+def _run_any(cmd, timeout=5):
+    """Run a command; always return stdout (even on non-zero exit)."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        return r.stdout.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _read(path):
+    """Read a file and return stripped content (null bytes removed), or None."""
+    try:
+        with open(path) as f:
+            return f.read().strip().rstrip("\x00")
+    except Exception:
+        return None
+
+
+def _iface_exists(name):
+    return os.path.exists(f"/sys/class/net/{name}")
+
+
+def _led_flash():
+    try:
+        subprocess.run(["go-flash-leds", "-r", "500", "5"], capture_output=True)
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────
+# Banner
+# ─────────────────────────────────────────────────────────────
+
+def _print_banner(version):
+    text = f"  GOcontroll Identify  V{version}  "
+    w = max(len(text), 60)
+    print(f"╔{'═' * w}╗")
+    print(f"║{text:<{w}}║")
+    print(f"╚{'═' * w}╝")
+    print()
+
+
+# ─────────────────────────────────────────────────────────────
+# Box-drawing renderer
+# ─────────────────────────────────────────────────────────────
+
+def _kv_box_width(title, rows):
+    """Compute the natural inner width for a _kv_box."""
+    if not rows:
+        return 0
+    kw = max(len(k) for k, _ in rows)
+    vw = max(max(len(str(v)) for _, v in rows), 38)
+    w = 2 + kw + 3 + vw + 1
+    title_line = f"  {title}"
+    if len(title_line) + 1 > w:
+        w = len(title_line) + 1
+    return w
+
+
+def _table_box_width(title, headers, rows):
+    """Compute the natural inner width for a _table_box."""
+    if not rows:
+        return 0
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < len(widths):
+                widths[i] = max(widths[i], len(str(cell)))
+    inner_w = sum(w + 2 for w in widths) + len(widths) - 1
+    title_content = f"  {title}"
+    if len(title_content) + 1 > inner_w:
+        inner_w = len(title_content) + 1
+    return inner_w
+
+
+def _kv_box(title, rows, min_width=0):
+    """
+    Render a single-column key/value box:
+    ╔═══════════════════════════╗
+    ║  TITLE                    ║
+    ╠═══════════════════════════╣
+    ║  key     │ value          ║
+    ╚═══════════════════════════╝
+    """
+    if not rows:
+        return
+    kw = max(len(k) for k, _ in rows)
+    # Compute total inner width: "  " + kw + " │ " + value + " "
+    # Minimum value width = 38 so the box isn't too narrow
+    vw = max(max(len(str(v)) for _, v in rows), 38)
+    w = 2 + kw + 3 + vw + 1          # total inner width
+    title_line = f"  {title}"
+    if len(title_line) + 1 > w:
+        w = len(title_line) + 1
+    if min_width > w:
+        vw += min_width - w
+        w = min_width
+
+    print(f"╔{'═'*w}╗")
+    print(f"║{title_line:<{w}}║")
+    print(f"╠{'═'*w}╣")
+    for k, v in rows:
+        val = str(v)
+        # Truncate long values with ellipsis
+        if len(val) > vw:
+            val = val[:vw-1] + "…"
+        print(f"║  {k:<{kw}} │ {val:<{vw}} ║")
+    print(f"╚{'═'*w}╝")
+    print()
+
+
+def _table_box(title, headers, rows, min_width=0):
+    """
+    Render a multi-column table box:
+    ╔═══════════════════════════════════════╗
+    ║  TITLE                                ║
+    ╠══════╦══════════════╦════════╦════════╣
+    ║ Col1 ║ Col2         ║ Col3   ║ Col4   ║
+    ╠══════╬══════════════╬════════╬════════╣
+    ║  1   ║ value        ║ ...    ║ ...    ║
+    ╚══════╩══════════════╩════════╩════════╝
+    """
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < len(widths):
+                widths[i] = max(widths[i], len(str(cell)))
+
+    def hline(l="╠", m="╬", r="╣", f="═"):
+        return l + m.join(f * (w + 2) for w in widths) + r
+
+    def data_row(cells):
+        parts = []
+        for i, w in enumerate(widths):
+            cell = str(cells[i]) if i < len(cells) else ""
+            parts.append(f" {cell:<{w}} ")
+        return "║" + "║".join(parts) + "║"
+
+    inner_w = sum(w + 2 for w in widths) + len(widths) - 1
+    # Ensure title section is at least as wide
+    title_content = f"  {title}"
+    if len(title_content) + 1 > inner_w:
+        widths[-1] += len(title_content) + 1 - inner_w
+        inner_w = len(title_content) + 1
+    if min_width > inner_w:
+        widths[-1] += min_width - inner_w
+        inner_w = min_width
+
+    print(f"╔{'═'*inner_w}╗")
+    print(f"║{title_content:<{inner_w}}║")
+    print(hline("╠", "╦", "╣"))
+    print(data_row(headers))
+    print(hline("╠", "╬", "╣"))
+    for row in rows:
+        print(data_row(row))
+    print(hline("╚", "╩", "╝"))
+    print()
+
+
+# ─────────────────────────────────────────────────────────────
+# Data collectors
+# ─────────────────────────────────────────────────────────────
+
+def collect_controller():
+    rows = []
+
+    model = _read("/sys/firmware/devicetree/base/model") or "unknown"
+    rows.append(("Model", model))
+
+    hardware = _read("/sys/firmware/devicetree/base/hardware") or "unknown"
+    rows.append(("Hardware", hardware))
+
+    sn = _run(["go-sn", "r"])
+    rows.append(("Serial Number", sn if sn else "not programmed"))
+
+    os_name = _run(["lsb_release", "-ds"]) or "unknown"
+    rows.append(("OS", os_name))
+
+    kernel = _run(["uname", "-r"]) or "unknown"
+    rows.append(("Kernel", kernel))
+
+    # Root filesystem usage
+    df = _run(["df", "-h", "--output=size,used,avail,pcent", "/"])
+    if df:
+        lines = df.splitlines()
+        if len(lines) >= 2:
+            parts = lines[1].split()
+            if len(parts) >= 4:
+                rows.append(("Root filesystem", f"{parts[0]} total  {parts[1]} used  {parts[2]} free  ({parts[3]})"))
+
+    return rows
+
+
+def collect_go_tools():
+    """Return list of (package, version) for all installed go-* packages."""
+    out = _run_any(["dpkg-query", "-W", "-f=${Package}\t${Version}\n"])
+    tools = []
+    for line in out.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2 and parts[0].startswith("go-"):
+            tools.append((parts[0], parts[1]))
+    # Put go-identify first, then sort the rest alphabetically
+    identify_entry = [(k, v) for k, v in tools if k == "go-identify"]
+    others = sorted([(k, v) for k, v in tools if k != "go-identify"])
+    return identify_entry + others
+
+
+def collect_ethernet():
+    """Find the primary ethernet interface and return its info."""
+    # On GOcontroll Moduline controllers the interface is typically 'end0'
+    # Fall back to eth0, then scan /sys/class/net for any non-virtual ethernet
+    candidates = ["end0", "eth0"]
+    iface = None
+    for c in candidates:
+        if _iface_exists(c):
+            iface = c
+            break
+    if iface is None:
+        # Scan for any ethernet interface
+        for name in os.listdir("/sys/class/net"):
+            if name.startswith(("end", "eth", "enp", "ens", "enx")):
+                iface = name
+                break
+    if iface is None:
+        return None, []
+
+    rows = []
+    mac = _read(f"/sys/class/net/{iface}/address") or "unknown"
+    rows.append(("MAC Address", mac))
+
+    # IPv4 address
+    ip_out = _run(["ip", "-4", "addr", "show", iface]) or ""
+    for line in ip_out.splitlines():
+        line = line.strip()
+        if line.startswith("inet "):
+            ip = line.split()[1]
+            rows.append(("IP Address", ip))
+            break
+    else:
+        rows.append(("IP Address", "not assigned"))
+
+    return iface, rows
+
+
+def collect_wifi():
+    """Return WiFi info if wlan0 is present, else None."""
+    if not _iface_exists("wlan0"):
+        return None
+
+    rows = []
+    mac = _read("/sys/class/net/wlan0/address") or "unknown"
+    rows.append(("WiFi MAC", mac))
+
+    # IP address
+    ip_out = _run(["ip", "-4", "addr", "show", "wlan0"]) or ""
+    for line in ip_out.splitlines():
+        line = line.strip()
+        if line.startswith("inet "):
+            rows.append(("WiFi IP", line.split()[1]))
+            break
+    else:
+        rows.append(("WiFi IP", "not assigned"))
+
+    # SSID and signal via nmcli (if available)
+    nmcli = _run(["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,BSSID",
+                  "dev", "wifi"])
+    if nmcli:
+        for line in nmcli.splitlines():
+            parts = line.split(":")
+            if parts and parts[0].lower() == "yes" and len(parts) >= 3:
+                ssid   = parts[1] if len(parts) > 1 else "-"
+                signal = parts[2] if len(parts) > 2 else "-"
+                rows.append(("SSID", ssid))
+                rows.append(("Signal", f"{signal}%"))
+                break
+    else:
+        # Fallback: try iwconfig
+        iw = _run(["iwconfig", "wlan0"])
+        if iw:
+            for line in iw.splitlines():
+                if "ESSID:" in line:
+                    ssid = line.split("ESSID:")[1].strip().strip('"')
+                    rows.append(("SSID", ssid))
+                if "Signal level=" in line:
+                    sig = line.split("Signal level=")[1].split()[0]
+                    rows.append(("Signal", sig))
+
+    # Bluetooth MAC (hci0)
+    if _iface_exists("hci0") or os.path.exists("/sys/class/bluetooth/hci0"):
+        bt_mac = _read("/sys/class/bluetooth/hci0/address") or "unknown"
+        rows.append(("Bluetooth MAC", bt_mac))
+
+    return rows
+
+
+def collect_modem():
+    """
+    Return 4G modem (SIM7600G) info via ModemManager (mmcli), or None if
+    no modem is present.
+    """
+    # Check if mmcli is available
+    if _run(["which", "mmcli"]) is None:
+        return None
+
+    modem_list = _run_any(["mmcli", "-L"])
+    if not modem_list or "No modems were found" in modem_list:
+        return None
+
+    # Parse modem index from output like: "/org/freedesktop/ModemManager1/Modem/0"
+    modem_idx = None
+    for line in modem_list.splitlines():
+        if "/Modem/" in line:
+            modem_idx = line.strip().split("/Modem/")[1].split()[0]
+            break
+    if modem_idx is None:
+        modem_idx = "0"
+
+    # Get JSON detail
+    detail_out = _run(["mmcli", "-m", modem_idx, "-J"])
+    if not detail_out:
+        return None
+
+    try:
+        data = json.loads(detail_out)
+        modem = data.get("modem", {})
+    except json.JSONDecodeError:
+        return None
+
+    rows = []
+
+    # IMEI (modem serial number)
+    imei = modem.get("3gpp", {}).get("imei", "-")
+    rows.append(("IMEI", imei))
+
+    # IMSI (SIM identifier)
+    imsi = modem.get("3gpp", {}).get("imsi", None)
+    if not imsi:
+        # Try getting SIM info
+        sim_path = modem.get("generic", {}).get("sim", "")
+        if sim_path and sim_path != "--":
+            sim_idx = sim_path.split("/")[-1]
+            sim_out = _run(["mmcli", "-i", sim_idx, "-J"])
+            if sim_out:
+                try:
+                    sim_data = json.loads(sim_out)
+                    imsi = sim_data.get("sim", {}).get("properties", {}).get("imsi", "-")
+                    iccid = sim_data.get("sim", {}).get("properties", {}).get("iccid", "-")
+                    rows.append(("IMSI", imsi))
+                    rows.append(("ICCID", iccid))
+                except Exception:
+                    rows.append(("IMSI", "-"))
+            else:
+                rows.append(("IMSI", "-"))
+        else:
+            rows.append(("IMSI", "-"))
+    else:
+        rows.append(("IMSI", imsi))
+
+    # Operator
+    operator = modem.get("3gpp", {}).get("operator-name", "-")
+    if not operator or operator == "--":
+        operator = "-"
+    rows.append(("Operator", operator))
+
+    # Connection state
+    state = modem.get("generic", {}).get("state", "-")
+    rows.append(("State", state))
+
+    # Signal quality
+    signal = modem.get("generic", {}).get("signal-quality", {})
+    if isinstance(signal, dict):
+        sig_val = signal.get("value", "-")
+        rows.append(("Signal", f"{sig_val}%"))
+    elif signal and signal != "--":
+        rows.append(("Signal", f"{signal}%"))
+
+    # IP address of wwan interface
+    wwan_iface = None
+    for name in os.listdir("/sys/class/net"):
+        if name.startswith("wwan") or name.startswith("ppp") or name.startswith("usb"):
+            ip_check = _run(["ip", "-4", "addr", "show", name])
+            if ip_check and "inet " in ip_check:
+                wwan_iface = name
+                break
+    if wwan_iface:
+        ip_out = _run(["ip", "-4", "addr", "show", wwan_iface]) or ""
+        for line in ip_out.splitlines():
+            line = line.strip()
+            if line.startswith("inet "):
+                rows.append(("IP Address", f"{line.split()[1]} (via {wwan_iface})"))
+                break
+
+    return rows
+
+
+def collect_can():
+    """Return list of (interface, state, bitrate) for CAN interfaces."""
+    result = []
+    can_ifaces = []
+    for name in sorted(os.listdir("/sys/class/net")):
+        if name.startswith("can"):
+            can_ifaces.append(name)
+
+    for iface in can_ifaces:
+        state = _read(f"/sys/class/net/{iface}/operstate") or "unknown"
+
+        # Get detailed info including bitrate via `ip -j -details link show <iface>`
+        bitrate = "-"
+        detail_out = _run(["ip", "-j", "-details", "link", "show", iface])
+        if detail_out:
+            try:
+                data = json.loads(detail_out)
+                if data:
+                    link = data[0]
+                    linkinfo = link.get("linkinfo", {})
+                    info_data = linkinfo.get("info_data", {})
+                    bt = info_data.get("bittiming", {})
+                    if isinstance(bt, dict) and "bitrate" in bt:
+                        bitrate = str(bt["bitrate"])
+                    # CAN state from linkinfo (more detailed than operstate)
+                    can_state = info_data.get("state", None)
+                    if can_state:
+                        state = can_state.replace("-", " ").title()
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass
+
+        # Fallback: parse text output of `ip -details link show`
+        if bitrate == "-":
+            text_out = _run(["ip", "-details", "link", "show", iface]) or ""
+            for line in text_out.splitlines():
+                line = line.strip()
+                if "bitrate" in line:
+                    for token in line.split():
+                        if token.isdigit():
+                            bitrate = token
+                            break
+
+        result.append((iface, state, bitrate))
+
+    return result
+
+
+def collect_modules():
+    """
+    Read installed module configuration from /lib/firmware/gocontroll/modules.
+    Returns (slots_total, rows) where rows = list of (slot, type, hw, sw).
+    """
+    try:
+        with open("/lib/firmware/gocontroll/modules") as f:
+            lines = f.readlines()
+    except Exception:
+        return 0, []
+
+    if len(lines) < 1:
+        return 0, []
+
+    firmware_strs = lines[0].rstrip("\n").split(":")
+
+    rows = []
+    for i, fw_str in enumerate(firmware_strs):
+        slot = i + 1
+        if not fw_str or fw_str == "":
+            rows.append((str(slot), "-", "-", "-"))
+            continue
+
+        parts = fw_str.split("-")
+        if len(parts) < 7:
+            rows.append((str(slot), fw_str, "-", "-"))
+            continue
+
+        try:
+            type_group = int(parts[1])
+            type_id    = int(parts[2])
+            hw_ver     = parts[3]
+            sw_maj     = parts[4]
+            sw_min     = parts[5]
+            sw_patch   = parts[6]
+        except (ValueError, IndexError):
+            rows.append((str(slot), fw_str, "-", "-"))
+            continue
+
+        module_name = MODULE_TYPES.get((type_group, type_id), f"Unknown ({type_group}-{type_id})")
+        hw_str      = f"1.{hw_ver}"
+        sw_str      = f"{sw_maj}.{sw_min}.{sw_patch}"
+
+        rows.append((str(slot), module_name, hw_str, sw_str))
+
+    return len(firmware_strs), rows
+
+
+# ─────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
         prog="identify",
-        description="""identify\n
-        Print some information about the controller and flash leds if present""",
-        add_help=True,
+        description="Display comprehensive information about a GOcontroll Moduline controller",
     )
     parser.add_argument(
-        "-v",
-        "--verbose",
-        required=False,
-        action=BooleanOptionalAction,
+        "-s", "--scan-modules",
+        action="store_true",
         default=False,
-        help="print more information"
+        help="actively scan modules via go-modules scan (interrupts simulink/nodered)",
     )
     parser.add_argument(
-        "-s",
-        "--scan-modules",
-        required=False,
-        action=BooleanOptionalAction,
+        "--no-flash",
+        action="store_true",
         default=False,
-        help="actively scan for modules (interrupts simulink/nodered)"
+        help="do not flash status LEDs",
     )
     args = parser.parse_args()
 
-    tf = threading.Thread(target=led_flashing)
-    tf.start()
+    # Flash LEDs in background (non-blocking)
+    if not args.no_flash:
+        threading.Thread(target=_led_flash, daemon=True).start()
 
-    print("Software/Hardware info:")
-    os = subprocess.run(["lsb_release", "-ds"], capture_output=True)
-    print(f"OS: {os.stdout.decode('utf-8').strip()}")
-    kernel = subprocess.run(["uname", "-r"], capture_output=True)
-    print(f"Kernel: {kernel.stdout.decode('utf-8').strip()}")
-    model = subprocess.run(["cat", "/sys/firmware/devicetree/base/model"], capture_output=True)
-    print(f"Model: {model.stdout.decode('utf-8')}")
-    hardware = subprocess.run(["cat", "/sys/firmware/devicetree/base/hardware"], capture_output=True)
-    print(f"Hardware: {hardware.stdout.decode('utf-8').strip()}")
-    sn = subprocess.run(["go-sn", "r"], capture_output=True)
-    if sn.returncode == 0:
-        print(f"Serial Number: {sn.stdout.decode('utf-8').strip()}\n")
-    else:
-        print("Serial Number: Could not get serial number maybe not written yet?")
-
+    # Optionally scan modules first
     if args.scan_modules:
-        try:
-            subprocess.run(["go-modules", "scan"], capture_output=True)
-        except:
-            print("could not run `go-modules scan`")
+        print("Scanning modules (this may take a moment)...")
+        _run(["go-modules", "scan"])
+        print()
 
-    print("Module configuration: ")
-    try:
-        with open("/lib/firmware/gocontroll/modules", "r") as modulesfile:
-            layout = modulesfile.readline()[:-1]
-            manufacturers = modulesfile.readline()[:-1]
-            moduleQRsfront = modulesfile.readline()[:-1]
-            moduleQRsback = modulesfile.readline()
-    except:
-        print("no module configuration found, run `go-modules scan` first")
-        return
+    # Collect all data up front so we can determine the uniform table width
+    controller_rows = collect_controller()
+    tools = collect_go_tools() or [("(none found)", "")]
+    eth_iface, eth_rows = collect_ethernet()
+    wifi_rows = collect_wifi()
+    modem_rows = collect_modem()
+    can_rows = collect_can()
+    _, mod_rows = collect_modules()
 
-    modules = layout.split(":")
-    manufacturers = manufacturers.split(":")
-    moduleQRsfront = moduleQRsfront.split(":")
-    moduleQRsback = moduleQRsback.split(":")
+    # Compute the natural width of every section, then use the widest for all
+    all_widths = [
+        _kv_box_width("CONTROLLER", controller_rows),
+        _kv_box_width("INSTALLED GO-* TOOLS", tools),
+    ]
+    if eth_rows:
+        all_widths.append(_kv_box_width(f"ETHERNET  ({eth_iface})", eth_rows))
+    if wifi_rows:
+        all_widths.append(_kv_box_width("WiFi / BLUETOOTH  (Murata 1YN)", wifi_rows))
+    if modem_rows:
+        all_widths.append(_kv_box_width("4G MODEM  (SIM7600G)", modem_rows))
+    if can_rows:
+        all_widths.append(_table_box_width(
+            "CAN INTERFACES",
+            ["Interface", "State", "Bitrate (bit/s)"],
+            can_rows,
+        ))
+    if mod_rows:
+        all_widths.append(_table_box_width(
+            "INSTALLED MODULES",
+            ["Slot", "Type", "HW Version", "SW Version"],
+            mod_rows,
+        ))
+    max_w = max(all_widths)
 
-    if args.verbose:
-        output=[["Slot", "Type", "HW Version", "SW Version", "Manufacturer", "QR front", "QR back"]]   
-        for i,module in enumerate(modules):
-            toAppend = [f"{i+1}"]
-            name = get_module_name(module)
-            if name == None:
-                toAppend = toAppend + ["-", "-", "-", "-", "-", "-"]
-                output.append(toAppend)
-            else: 
-                toAppend.append(name)
-                moduleSplit = module.split("-")
-                toAppend = toAppend + [moduleSplit[3], moduleSplit[4]+"."+moduleSplit[5]+"."+moduleSplit[6], manufacturers[i], moduleQRsfront[i], moduleQRsback[i]]
-                output.append(toAppend)
+    # Determine tool version from dpkg (or fall back to hard-coded)
+    self_version = _run(["dpkg-query", "-W", "-f=${Version}", "go-identify"]) or "2.1.0"
+
+    _print_banner(self_version)
+
+    # ── CONTROLLER ──────────────────────────────────────────
+    _kv_box("CONTROLLER", controller_rows, min_width=max_w)
+
+    # ── INSTALLED GO-* TOOLS ────────────────────────────────
+    _kv_box("INSTALLED GO-* TOOLS", tools, min_width=max_w)
+
+    # ── ETHERNET ────────────────────────────────────────────
+    if eth_rows:
+        _kv_box(f"ETHERNET  ({eth_iface})", eth_rows, min_width=max_w)
     else:
-        output=[["Slot", "Type", "HW Version", "SW Version"]]   
-        for i,module in enumerate(modules):
-            toAppend = [f"{i+1}"]
-            name = get_module_name(module)
-            if name == None:
-                toAppend = toAppend + ["-", "-", "-"]
-                output.append(toAppend)
-            else:
-                toAppend.append(name)
-                moduleSplit = module.split("-")
-                toAppend = toAppend + [moduleSplit[3], moduleSplit[4]+"."+moduleSplit[5]+"."+moduleSplit[6]]
-                output.append(toAppend)
+        print("No ethernet interface found.\n")
 
-    s = [[str(e) for e in row] for row in output]
-    lens = [max(map(len, col)) for col in zip(*s)]
-    fmt = '\t'.join('{{:{}}}'.format(x) for x in lens)
-    table = [fmt.format(*row) for row in s]
-    print('\n'.join(table))
-    tf.join()
+    # ── WiFi / BLUETOOTH ────────────────────────────────────
+    if wifi_rows:
+        _kv_box("WiFi / BLUETOOTH  (Murata 1YN)", wifi_rows, min_width=max_w)
+
+    # ── 4G MODEM ────────────────────────────────────────────
+    if modem_rows:
+        _kv_box("4G MODEM  (SIM7600G)", modem_rows, min_width=max_w)
+
+    # ── CAN INTERFACES ──────────────────────────────────────
+    if can_rows:
+        _table_box(
+            "CAN INTERFACES",
+            ["Interface", "State", "Bitrate (bit/s)"],
+            can_rows,
+            min_width=max_w,
+        )
+    else:
+        print("No CAN interfaces found.\n")
+
+    # ── INSTALLED MODULES ───────────────────────────────────
+    if mod_rows:
+        _table_box(
+            "INSTALLED MODULES",
+            ["Slot", "Type", "HW Version", "SW Version"],
+            mod_rows,
+            min_width=max_w,
+        )
+    else:
+        print("No module configuration found — run 'go-modules scan' first.\n")
+
 
 if __name__ == "__main__":
-    identify()
+    main()

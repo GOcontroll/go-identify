@@ -31,7 +31,7 @@ jobs:
 
           mkdir -p "${BUILD}/DEBIAN" "${BUILD}/usr/bin" "${DIST}"
 
-          install -Dm755 go-identify "${BUILD}/usr/bin/go-identify"
+          install -Dm755 identify "${BUILD}/usr/bin/identify"
 
           cat > "${BUILD}/DEBIAN/control" << CONTROL
           Package: ${PACKAGE}

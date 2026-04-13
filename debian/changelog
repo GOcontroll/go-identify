@@ -1,3 +1,13 @@
+go-identify (2.1.0) unstable; urgency=medium
+
+  * Renamed executable from 'go-identify' back to 'identify'
+  * Improved GOcontroll banner header with block-art logo
+  * All output tables/boxes rendered at uniform width (widest section sets the width)
+  * CAN interfaces: removed Controller column
+  * Installed modules: removed Released column and cloud manifest lookup
+
+ -- Rick-GO <rickgijsberts@gocontroll.com>  Mon, 13 Apr 2026 00:00:00 +0200
+
 go-identify (2.0.0) unstable; urgency=medium
 
   * Complete rewrite with comprehensive controller information display

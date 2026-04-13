@@ -9,5 +9,5 @@
 	dh $@
 
 override_dh_install:
-	dh_install go-identify /usr/bin/
+	dh_install identify /usr/bin/
 
