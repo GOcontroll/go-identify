@@ -547,8 +547,12 @@ def collect_modules():
         qrf = qrf_strs[i].strip() if i < len(qrf_strs) else "0"
         qrb = qrb_strs[i].strip() if i < len(qrb_strs) else "0"
 
-        if any(c not in ("0", "") for c in (mfr, qrf, qrb)):
-            display_rows.append(("", f"Mfr: {mfr}", f"QR-F: {qrf}", f"QR-B: {qrb}"))
+        if mfr not in ("0", ""):
+            display_rows.append(("", f"Mfr:  {mfr}", "", ""))
+        if qrf not in ("0", ""):
+            display_rows.append(("", f"QR-F: {qrf}", "", ""))
+        if qrb not in ("0", ""):
+            display_rows.append(("", f"QR-B: {qrb}", "", ""))
 
     return len(firmware_strs), display_rows, width_rows
 
