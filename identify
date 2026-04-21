@@ -151,7 +151,7 @@ def _kv_box(title, rows, min_width=0):
     print()
 
 
-def _table_box(title, headers, rows, min_width=0):
+def _table_box(title, headers, rows, min_width=0, col_widths=None):
     """
     Render a multi-column table box:
     ╔═══════════════════════════════════════╗
@@ -162,11 +162,14 @@ def _table_box(title, headers, rows, min_width=0):
     ║  1   ║ value        ║ ...    ║ ...    ║
     ╚══════╩══════════════╩════════╩════════╝
     """
-    widths = [len(h) for h in headers]
-    for row in rows:
-        for i, cell in enumerate(row):
-            if i < len(widths):
-                widths[i] = max(widths[i], len(str(cell)))
+    if col_widths is not None:
+        widths = list(col_widths)
+    else:
+        widths = [len(h) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                if i < len(widths):
+                    widths[i] = max(widths[i], len(str(cell)))
 
     def hline(l="╠", m="╬", r="╣", f="═"):
         return l + m.join(f * (w + 2) for w in widths) + r
@@ -175,6 +178,8 @@ def _table_box(title, headers, rows, min_width=0):
         parts = []
         for i, w in enumerate(widths):
             cell = str(cells[i]) if i < len(cells) else ""
+            if len(cell) > w:
+                cell = cell[:w - 1] + "…"
             parts.append(f" {cell:<{w}} ")
         return "║" + "║".join(parts) + "║"
 
@@ -485,29 +490,37 @@ def collect_can():
 def collect_modules():
     """
     Read installed module configuration from /lib/firmware/gocontroll/modules.
-    Returns (slots_total, rows) where rows = list of (slot, type, hw, sw).
+    Returns (slots_total, display_rows, width_rows) where display_rows includes
+    codes sub-rows and width_rows contains only the main module rows for width
+    calculation so that codes sub-rows do not affect the table width.
     """
     try:
         with open("/lib/firmware/gocontroll/modules") as f:
             lines = f.readlines()
     except Exception:
-        return 0, []
+        return 0, [], []
 
     if len(lines) < 1:
-        return 0, []
+        return 0, [], []
 
     firmware_strs = lines[0].rstrip("\n").split(":")
+    mfr_strs = lines[1].rstrip("\n").split(":") if len(lines) > 1 else []
+    qrf_strs = lines[2].rstrip("\n").split(":") if len(lines) > 2 else []
+    qrb_strs = lines[3].rstrip("\n").split(":") if len(lines) > 3 else []
 
-    rows = []
+    display_rows = []
+    width_rows   = []
     for i, fw_str in enumerate(firmware_strs):
         slot = i + 1
         if not fw_str or fw_str == "":
-            rows.append((str(slot), "-", "-", "-"))
+            display_rows.append((str(slot), "-", "-", "-"))
+            width_rows.append((str(slot), "-", "-", "-"))
             continue
 
         parts = fw_str.split("-")
         if len(parts) < 7:
-            rows.append((str(slot), fw_str, "-", "-"))
+            display_rows.append((str(slot), fw_str, "-", "-"))
+            width_rows.append((str(slot), fw_str, "-", "-"))
             continue
 
         try:
@@ -518,16 +531,30 @@ def collect_modules():
             sw_min     = parts[5]
             sw_patch   = parts[6]
         except (ValueError, IndexError):
-            rows.append((str(slot), fw_str, "-", "-"))
+            display_rows.append((str(slot), fw_str, "-", "-"))
+            width_rows.append((str(slot), fw_str, "-", "-"))
             continue
 
         module_name = MODULE_TYPES.get((type_group, type_id), f"Unknown ({type_group}-{type_id})")
         hw_str      = f"1.{hw_ver}"
         sw_str      = f"{sw_maj}.{sw_min}.{sw_patch}"
 
-        rows.append((str(slot), module_name, hw_str, sw_str))
+        main_row = (str(slot), module_name, hw_str, sw_str)
+        display_rows.append(main_row)
+        width_rows.append(main_row)
 
-    return len(firmware_strs), rows
+        mfr = mfr_strs[i].strip() if i < len(mfr_strs) else "0"
+        qrf = qrf_strs[i].strip() if i < len(qrf_strs) else "0"
+        qrb = qrb_strs[i].strip() if i < len(qrb_strs) else "0"
+
+        if mfr not in ("0", ""):
+            display_rows.append(("", f"Mfr:  {mfr}", "", ""))
+        if qrf not in ("0", ""):
+            display_rows.append(("", f"QR-F: {qrf}", "", ""))
+        if qrb not in ("0", ""):
+            display_rows.append(("", f"QR-B: {qrb}", "", ""))
+
+    return len(firmware_strs), display_rows, width_rows
 
 
 # ─────────────────────────────────────────────────────────────
@@ -572,7 +599,7 @@ def main():
     wifi_rows = collect_wifi()
     modem_rows = collect_modem()
     can_rows = collect_can()
-    _, mod_rows = collect_modules()
+    _, mod_display_rows, mod_width_rows = collect_modules()
 
     # Compute the natural width of every section, then use the widest for all
     all_widths = [
@@ -591,13 +618,21 @@ def main():
             ["Interface", "State", "Bitrate (bit/s)"],
             can_rows,
         ))
-    if mod_rows:
+    _MOD_HEADERS = ["Slot", "Type", "HW Version", "SW Version"]
+    if mod_width_rows:
         all_widths.append(_table_box_width(
             "INSTALLED MODULES",
-            ["Slot", "Type", "HW Version", "SW Version"],
-            mod_rows,
+            _MOD_HEADERS,
+            mod_width_rows,
         ))
     max_w = max(all_widths)
+
+    # Fixed column widths for modules table (derived from main rows only so that
+    # codes sub-rows do not widen the table).
+    _mod_col_widths = [len(h) for h in _MOD_HEADERS]
+    for row in mod_width_rows:
+        for i, cell in enumerate(row):
+            _mod_col_widths[i] = max(_mod_col_widths[i], len(str(cell)))
 
     # Determine tool version from dpkg (or fall back to hard-coded)
     self_version = _run(["dpkg-query", "-W", "-f=${Version}", "go-identify"]) or "2.1.0"
@@ -636,12 +671,13 @@ def main():
         print("No CAN interfaces found.\n")
 
     # ── INSTALLED MODULES ───────────────────────────────────
-    if mod_rows:
+    if mod_display_rows:
         _table_box(
             "INSTALLED MODULES",
-            ["Slot", "Type", "HW Version", "SW Version"],
-            mod_rows,
+            _MOD_HEADERS,
+            mod_display_rows,
             min_width=max_w,
+            col_widths=_mod_col_widths,
         )
     else:
         print("No module configuration found — run 'go-modules scan' first.\n")
