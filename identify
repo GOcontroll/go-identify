@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-identify v2.1.0 — GOcontroll controller identification tool
+identify v2.2.1 — GOcontroll controller identification tool
 
 Displays comprehensive information about a GOcontroll Moduline controller:
 controller hardware, installed go-* tools, network interfaces (Ethernet, WiFi,
@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 
 # Maps (type_group, type_id) from firmware bytes to human-readable module name
 MODULE_TYPES = {
@@ -62,11 +63,49 @@ def _iface_exists(name):
     return os.path.exists(f"/sys/class/net/{name}")
 
 
-def _led_flash():
+def _led_flash(pulses=5):
+    # I2C LED driver (address 0x14 on bus 2)
+    # Registers: reset=0x17, enable=0x00
+    # LED 1-4 RGB channels: 0x0B-0x16
     try:
-        subprocess.run(["go-flash-leds", "-r", "500", "5"], capture_output=True)
+        try:
+            import smbus2
+            bus = smbus2.SMBus(2)
+        except ImportError:
+            import smbus
+            bus = smbus.SMBus(2)
+    except Exception:
+        return
+
+    _LED_REGS = [
+        (0x0B, 0x0C, 0x0D),
+        (0x0E, 0x0F, 0x10),
+        (0x11, 0x12, 0x13),
+        (0x14, 0x15, 0x16),
+    ]
+    ADDR = 0x14
+
+    def _set_leds(r, g, b):
+        for rr, rg, rb in _LED_REGS:
+            bus.write_byte_data(ADDR, rr, r)
+            bus.write_byte_data(ADDR, rg, g)
+            bus.write_byte_data(ADDR, rb, b)
+
+    try:
+        bus.write_byte_data(ADDR, 0x17, 0xFF)  # reset
+        bus.write_byte_data(ADDR, 0x00, 0x40)  # enable
+        for _ in range(pulses):
+            _set_leds(165, 50, 0)
+            time.sleep(0.2)
+            _set_leds(0, 0, 0)
+            time.sleep(0.2)
     except Exception:
         pass
+    finally:
+        try:
+            bus.close()
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────────────────────────
@@ -605,7 +644,7 @@ def main():
     max_w = max(all_widths)
 
     # Determine tool version from dpkg (or fall back to hard-coded)
-    self_version = _run(["dpkg-query", "-W", "-f=${Version}", "go-identify"]) or "2.1.0"
+    self_version = _run(["dpkg-query", "-W", "-f=${Version}", "go-identify"]) or "2.2.1"
 
     _print_banner(self_version)
 

@@ -1,3 +1,10 @@
+go-identify (2.2.1) unstable; urgency=medium
+
+  * Inline LED flashing via I2C (smbus2/smbus), removing dependency on go-flash-leds
+  * Add python3-smbus2 | python3-smbus to Depends
+
+ -- Rick-GO <rickgijsberts@gocontroll.com>  Sat, 26 Apr 2026 00:00:00 +0200
+
 go-identify (2.1.0) unstable; urgency=medium
 
   * Renamed executable from 'go-identify' back to 'identify'

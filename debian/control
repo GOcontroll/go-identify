@@ -18,11 +18,10 @@ Depends:
  go-sn,
  python3,
  iproute2,
+ python3-smbus2 | python3-smbus,
 Recommends:
  network-manager,
  modemmanager,
-Suggests:
- python3-go-leds,
 Description: Comprehensive controller identification tool for GOcontroll Moduline
  Displays controller hardware info, installed go-* tool versions, Ethernet,
  WiFi/Bluetooth, 4G modem (SIM7600G), CAN interfaces, and installed module
