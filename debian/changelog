@@ -1,3 +1,10 @@
+go-identify (2.2.2) unstable; urgency=medium
+
+  * Orange banner header per GOcontroll spec (RGB 255,102,0)
+  * Show available update versions in INSTALLED GO-* TOOLS (fetched from apt.gocontroll.com)
+
+ -- Rick-GO <rickgijsberts@gocontroll.com>  Sun, 27 Apr 2026 00:00:00 +0200
+
 go-identify (2.2.1) unstable; urgency=medium
 
   * Inline LED flashing via I2C (smbus2/smbus), removing dependency on go-flash-leds

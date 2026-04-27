@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-identify v2.2.1 — GOcontroll controller identification tool
+identify v2.2.2 — GOcontroll controller identification tool
 
 Displays comprehensive information about a GOcontroll Moduline controller:
 controller hardware, installed go-* tools, network interfaces (Ethernet, WiFi,
@@ -12,6 +12,9 @@ import os
 import subprocess
 import threading
 import time
+
+_ORANGE = "\x1b[38;2;255;102;0m"
+_RESET  = "\x1b[0m"
 
 # Maps (type_group, type_id) from firmware bytes to human-readable module name
 MODULE_TYPES = {
@@ -112,12 +115,10 @@ def _led_flash(pulses=5):
 # Banner
 # ─────────────────────────────────────────────────────────────
 
-def _print_banner(version):
-    text = f"  GOcontroll Identify  V{version}  "
-    w = max(len(text), 60)
-    print(f"╔{'═' * w}╗")
-    print(f"║{text:<{w}}║")
-    print(f"╚{'═' * w}╝")
+def _print_banner(version, inner_width=60):
+    text = f"  GOcontroll Identify  V{version}"
+    print(f"{_ORANGE}{text}{_RESET}")
+    print("-" * (inner_width + 2))
     print()
 
 
@@ -575,6 +576,82 @@ def collect_modules():
 
 
 # ─────────────────────────────────────────────────────────────
+# APT update check
+# ─────────────────────────────────────────────────────────────
+
+def fetch_apt_versions(timeout=5):
+    """
+    Fetch available go-* package versions from apt.gocontroll.com.
+    Returns dict {pkg: version} on success, None if unreachable.
+    """
+    import urllib.request
+    import gzip as _gzip
+
+    codename = _run(["lsb_release", "-cs"]) or "bookworm"
+    base_url = "https://apt.gocontroll.com"
+
+    # Prefer the exact URL from the apt sources entry
+    try:
+        import glob as _glob
+        for path in sorted(_glob.glob("/etc/apt/sources.list.d/*.list")):
+            try:
+                with open(path) as _f:
+                    for _line in _f:
+                        _line = _line.strip()
+                        if not _line or _line.startswith("#"):
+                            continue
+                        parts = _line.split()
+                        if len(parts) >= 3 and "gocontroll" in " ".join(parts).lower():
+                            for part in parts:
+                                if part.startswith("http"):
+                                    base_url = part.rstrip("/")
+                            # codename is always the second-to-last token before "main"
+                            for i, p in enumerate(parts):
+                                if p == "main" and i >= 1:
+                                    codename = parts[i - 1]
+                            break
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    for ext in (".gz", ""):
+        url = f"{base_url}/dists/{codename}/main/binary-arm64/Packages{ext}"
+        try:
+            data = urllib.request.urlopen(url, timeout=timeout).read()
+            try:
+                text = _gzip.decompress(data).decode("utf-8", errors="replace")
+            except Exception:
+                text = data.decode("utf-8", errors="replace")
+
+            versions = {}
+            current_pkg = None
+            for line in text.splitlines():
+                if line.startswith("Package: "):
+                    current_pkg = line[9:].strip()
+                elif line.startswith("Version: ") and current_pkg:
+                    if current_pkg.startswith("go-"):
+                        versions[current_pkg] = line[9:].strip()
+            return versions
+        except Exception:
+            continue
+
+    return None
+
+
+def _is_newer(v_candidate, v_installed):
+    """Return True if v_candidate is newer than v_installed (dpkg ordering)."""
+    try:
+        r = subprocess.run(
+            ["dpkg", "--compare-versions", v_candidate, "gt", v_installed],
+            capture_output=True,
+        )
+        return r.returncode == 0
+    except Exception:
+        return v_candidate != v_installed
+
+
+# ─────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────
 
@@ -603,6 +680,15 @@ def main():
     if not args.no_flash:
         threading.Thread(target=_led_flash, daemon=True).start()
 
+    # Start apt version fetch in background (runs while local data is collected)
+    _apt_result = [None]
+
+    def _do_apt_fetch():
+        _apt_result[0] = fetch_apt_versions()
+
+    _apt_thread = threading.Thread(target=_do_apt_fetch, daemon=True)
+    _apt_thread.start()
+
     # Optionally scan modules first
     if args.scan_modules:
         print("Scanning modules (this may take a moment)...")
@@ -618,10 +704,33 @@ def main():
     can_rows = collect_can()
     _, mod_rows = collect_modules()
 
+    # Wait for apt fetch (started earlier; usually done by now)
+    _apt_thread.join(timeout=6)
+    apt_versions = _apt_result[0]
+
+    # Build tool display rows: 3 columns when apt versions available, 2 otherwise
+    if apt_versions is not None:
+        _tool_headers = ["Package", "Installed", "Available"]
+        _tool_rows = [
+            (
+                name,
+                ver,
+                apt_versions[name]
+                if name in apt_versions and _is_newer(apt_versions[name], ver)
+                else "-",
+            )
+            for name, ver in tools
+        ]
+    else:
+        _tool_headers = None
+        _tool_rows = None
+
     # Compute the natural width of every section, then use the widest for all
     all_widths = [
         _kv_box_width("CONTROLLER", controller_rows),
-        _kv_box_width("INSTALLED GO-* TOOLS", tools),
+        _table_box_width("INSTALLED GO-* TOOLS", _tool_headers, _tool_rows)
+        if _tool_rows
+        else _kv_box_width("INSTALLED GO-* TOOLS", tools),
     ]
     if eth_rows:
         all_widths.append(_kv_box_width(f"ETHERNET  ({eth_iface})", eth_rows))
@@ -644,15 +753,18 @@ def main():
     max_w = max(all_widths)
 
     # Determine tool version from dpkg (or fall back to hard-coded)
-    self_version = _run(["dpkg-query", "-W", "-f=${Version}", "go-identify"]) or "2.2.1"
+    self_version = _run(["dpkg-query", "-W", "-f=${Version}", "go-identify"]) or "2.2.2"
 
-    _print_banner(self_version)
+    _print_banner(self_version, max_w)
 
     # ── CONTROLLER ──────────────────────────────────────────
     _kv_box("CONTROLLER", controller_rows, min_width=max_w)
 
     # ── INSTALLED GO-* TOOLS ────────────────────────────────
-    _kv_box("INSTALLED GO-* TOOLS", tools, min_width=max_w)
+    if _tool_rows:
+        _table_box("INSTALLED GO-* TOOLS", _tool_headers, _tool_rows, min_width=max_w)
+    else:
+        _kv_box("INSTALLED GO-* TOOLS", tools, min_width=max_w)
 
     # ── ETHERNET ────────────────────────────────────────────
     if eth_rows:
