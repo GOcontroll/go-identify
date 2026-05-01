@@ -1,3 +1,36 @@
+go-identify (2.2.3) unstable; urgency=medium
+
+  * Read modules from /lib/firmware/gocontroll/modules.json (new format) when the
+    legacy colon-separated /lib/firmware/gocontroll/modules file is absent;
+    legacy file takes precedence when both exist (backward compatibility).
+  * CAN INTERFACES: removed State column (only Interface + Bitrate now).
+  * CONTROLLER: prefer /sys/firmware/devicetree/base/platform over /hardware
+    when present; fall back to /hardware when /platform is absent.
+  * INSTALLED MODULES / CAN INTERFACES / INSTALLED GO-* TOOLS: append usage hint
+    to title ("- go-modules for management", "- go-can for configurations",
+    "- apt-get update - install") with the relevant commands in orange.
+  * Fix: send a Debian APT-HTTP/1.3 User-Agent when fetching the apt.gocontroll.com
+    manifest; Cloudflare blocks Python's default User-Agent with 403, which
+    silently disabled the manifest column.
+  * INSTALLED GO-* TOOLS: rename "Package" header to "go-*"; rename "Available"
+    to "Manifest" and always show the apt manifest version (not only when
+    newer); colour package names green when up-to-date, orange when an update
+    is available on apt.gocontroll.com.
+  * Box renderers are now ANSI-aware (visible-length aware padding/width
+    calculations) so coloured titles and cells align correctly.
+  * 4G MODEM: detect whether the go-wwan systemd service is active and, when
+    inactive, surface a "Service" row with an enable hint
+    (systemctl enable --now go-wwan, highlighted in orange). Detection is
+    passive — the service is never started or stopped by identify itself.
+  * _kv_box renderer is now ANSI-aware for cell values too, so coloured rows
+    align correctly.
+  * INSTALLED MODULES: auto-bootstrap by running `go-modules scan` when neither
+    /lib/firmware/gocontroll/modules nor /lib/firmware/gocontroll/modules.json
+    exists yet (a one-shot scan that writes the cache file). Explicit -s flag
+    behaviour is unchanged.
+
+ -- Rick-GO <rickgijsberts@gocontroll.com>  Fri, 01 May 2026 00:00:00 +0200
+
 go-identify (2.2.2) unstable; urgency=medium
 
   * Orange banner header per GOcontroll spec (RGB 255,102,0)
