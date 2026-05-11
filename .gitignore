@@ -4,3 +4,4 @@ debian/*
 !debian/copyright
 !debian/control
 !debian/source
+.claude/settings.local.json
