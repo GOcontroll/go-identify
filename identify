@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-identify v2.2.3 — GOcontroll controller identification tool
+identify v2.2.4 — GOcontroll controller identification tool
 
 Displays comprehensive information about a GOcontroll Moduline controller:
 controller hardware, installed go-* tools, network interfaces (Ethernet, WiFi,
@@ -589,7 +589,15 @@ def _read_modules_legacy(path=_MODULES_LEGACY_PATH):
 
 
 def _read_modules_json(path=_MODULES_JSON_PATH):
-    """Read the JSON modules file. Returns list of fw strings indexed by slot, or None if absent/invalid."""
+    """
+    Read the JSON modules file. Returns list of fw strings indexed by slot, or
+    None if absent/invalid.
+
+    Accepts two layouts produced by go-modules across versions:
+      1. A top-level list of slot dicts (early modules.json format).
+      2. A top-level dict with a "slots" key holding the list (current format,
+         alongside schema_version / controller metadata).
+    """
     try:
         with open(path) as f:
             data = json.load(f)
@@ -598,11 +606,18 @@ def _read_modules_json(path=_MODULES_JSON_PATH):
     except Exception:
         return None
 
-    if not isinstance(data, list) or not data:
+    if isinstance(data, dict):
+        slots = data.get("slots")
+    elif isinstance(data, list):
+        slots = data
+    else:
+        return None
+
+    if not isinstance(slots, list) or not slots:
         return None
 
     fw_by_slot = {}
-    for entry in data:
+    for entry in slots:
         if not isinstance(entry, dict):
             continue
         slot = entry.get("slot")
@@ -831,7 +846,7 @@ def main():
     max_w = max(all_widths)
 
     # Determine tool version from dpkg (or fall back to hard-coded)
-    self_version = _run(["dpkg-query", "-W", "-f=${Version}", "go-identify"]) or "2.2.3"
+    self_version = _run(["dpkg-query", "-W", "-f=${Version}", "go-identify"]) or "2.2.4"
 
     _print_banner(self_version, max_w)
 

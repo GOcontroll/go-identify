@@ -1,3 +1,15 @@
+go-identify (2.2.4) unstable; urgency=medium
+
+  * INSTALLED MODULES: accept the current modules.json layout produced by newer
+    go-modules versions (top-level object with schema_version / controller /
+    slots fields). The previous reader only accepted a top-level list, so
+    identify reported "No module configuration found" on controllers running a
+    newer go-modules even though a valid modules.json was present. Both
+    layouts are now supported; the legacy colon-separated file still takes
+    precedence when both exist.
+
+ -- Rick-GO <rickgijsberts@gocontroll.com>  Wed, 13 May 2026 00:00:00 +0200
+
 go-identify (2.2.3) unstable; urgency=medium
 
   * Read modules from /lib/firmware/gocontroll/modules.json (new format) when the
